@@ -1,0 +1,394 @@
+---
+title: "Predicitng a House's Price"
+author: "Toan Pham"
+date: "11/22/2020"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE, fig.height = 3, fig.width = 6)
+library(tidyverse)
+library(knitr)
+library(caret)
+library(corrplot)
+library(glmnet)
+library(MASS)
+library(rpart)
+library(rpart.plot)
+```
+
+## Abstract
+
+In this project, we will predict the price of 1000 houses in King County, Washington in 2014 and 2015, using a training data set of 1000 other houses sold in King County during the same time period. We attempted to build a model that can give
+the best prediction of house prices. Using cross-validation, we choose one amongst 7 different models using different variables. The final model have 16 variables: number of bedrooms, number of bathrooms, living area, lot area(2015 and original), number of floor, waterfront, view, condition, grade, area above, basement area, year built, year renovated, day passed.
+
+\newpage
+
+
+## Introduction
+
+We developed model to predict the prices of 1000 houses sold in King County, Washington in 2014
+and 2015 , using another training data set of 1000 houses sold in King County during
+the same time period. Using different graphs and tables, we determine the strong variables that will be put into the model. There are a total of 7 different models using different variables in this report. Using cross-validation and testing RMSPE, we choose the model that return the smallest RMSPE. Finally, we use the model to predict the price for the testing data.
+and engineered some of those variables to give them better ability to predict house prices. We then came up with
+6 models using different explanatory variables, and compared their test error (RMSPE) using cross-validation
+method to get the model with the smallest RMSPE value. We would ultimately use that model to predict the prices
+of 1000 houses in Test data.
+In this project, we strive to make the best prediction model for the two data set, without making an overly complicated model. This information will be very useful for people interested in buying or selling a house near the King County area.
+
+
+## Exploratory Analysis
+
+```{r}
+Train <- read.csv("train.csv")
+Test <- read.csv("test.csv")
+options(scipen = 7)
+```
+
+
+```{r}
+#It's ok to provide raw R output from summary() or glimpse()
+summary(Train)
+```
+
+```{r}
+glimpse(Train)
+```
+
+In the original Train data set, we have 21 variables and a total of 1000 observations. There are only 1 categorical variable "waterfront", and the rest are quantitative. Also, there are no missing values in our dataset, so we are going to use all 1000 observations.
+
+```{r, fig.cap="Figure 1 :Price Distribution"}
+ggplot(data=Train, aes(x=price)) + 
+  geom_histogram(fill="blue", color="white") + 
+  ylab("frequency") + 
+  xlab("Price") +
+  ggtitle("Distribution of Prices")
+```
+
+Figure 1 show the distribution of prices to be right-skewed. The majority of the houses are under 1 millions USD in price, with most being around 400-500 thousands USD.However, as the histogram is right-skewed, there are a few outliers that are way higher than 1 millions, with the highest being around 4.5 millions.
+
+```{r, fig.cap="Figure 2: Size of House Distribution"}
+ggplot(data=Train, aes(x=sqft_living)) + 
+  geom_histogram(fill="blue", color="white") + 
+  ylab("frequency") + 
+  xlab("Square footage of the home") +
+  ggtitle("Distribution of Size")
+```
+
+Figure 2 show the distribution of size to also be right-skewed, although the range are not as extreme as price. The majoirty of the houses have size between 1000 and 3500 square feet. Houses that are bigger than 3500 square feet are less common the bigger they get, with houses that exceed 6000 square feet being near non-existant.
+
+```{r, fig.cap="Figure 3: Price Distribution by Waterfront"}
+ggplot(data=Train, aes(y=price, x=waterfront)) + 
+  geom_violin( aes(fill=waterfront)) + 
+  geom_boxplot(width=0.2) +
+  ggtitle("Price Distribution by Waterfront")
+```
+
+Figure 3 gives us some interesting results about the waterfront and prices. In general, houses with waterfront are expected to be more expensive than houses without. However, the distribution of price between these two types are quite varied. In non-waterfront houses, the price are extremely consistent. In other words, most houses without waterfront are very similar in price: a bit less than $500000. Houses without waterfront rarely exceed the 1.5 millions  USD mark. In constrast, the price distribution for house with waterfront are quite even across all price range, from 500000 USD to 3500000USD. There are no price range that are way more common than others, although the higher end houses are somewhat rarer than cheaper ones. However, one thing that should be noted is that there are only 7 houses without waterfront in our data set, so this observation may not be accurate to real life.
+
+```{r, fig.cap="Figure 4: Price and Square Feet without Basement Plot"}
+ggplot(data=Train, aes(x=sqft_above, y=price)) + geom_point() + stat_smooth(method="lm") +
+  ylab("Price") + 
+  xlab("Square foot of the house without basement") +
+  ggtitle("Price and Size without Basement Plot")
+```
+
+Figure 4 shows that there is an obvious direct correlation between price and size of house not counting basement. In other words, generally, the bigger the house, the more expensive it gets. One thing to note is that one house is responsible for the strongest outlier for both price and size, costing more than 4.5 millions USD and bigger than 6000 square feet.
+
+```{r, fig.cap="Figure 5: Bedrooms Distribution"}
+ggplot(data=Train, aes(x=bedrooms)) + 
+  geom_histogram(fill="blue", color="white", binwidth= 0.8) + 
+  ylab("frequency") + 
+  xlab("Number of bedrooms") +
+  ggtitle("Distribution of Bedrooms")
+```
+
+Figure 5 show the majority of the houses have 3 to 5 bedrooms. 2 bedrooms houses are also quite common, although not as abundant as the previous range. There are almost no houses that exceed 6 bedrooms, with only one single house with 8 bedrooms.
+```{r, fig.cap="Table 1: Condition Table"}
+T1 <- Train %>% group_by(condition) %>% summarize(Mean_Price = mean(price), 
+                                             SD_Price = sd(price), 
+                                             Median_Price = median(price),
+                                             N = n())
+kable(T1, caption="Average, Standard Deviation, Median Price by Condition")
+```
+
+Table 1 shows that "condition" is not as straightforward as initially expected. While condition 5 has the highest mean and median price, which implies a direct correlation between condition and price, condition 4 and condition 5 suggest otherwise. More specifically, condition 3 actually have both higher mean price and median price compared to condition 4. Although the difference is not extreme as condition 2 vs condition 3, this may be worth taking under consideration when building our model. There is only one house with condition 1 so we do not consider it. 
+
+```{r, fig.cap="Table 2: View Table"}
+T1 <- Train %>% group_by(view) %>% summarize(Mean_Price = mean(price), 
+                                             SD_Price = sd(price), 
+                                             Median_Price = median(price),
+                                             N = n())
+kable(T1, caption="Average, Standard Deviation, Median Price by View")
+```
+
+Table 2 shows that houses that have never been viewed are cheaper than houses that have been viewed. Also, the most majority of the houses also have never been viewed. On the other hand, the number of time viewed does not seem to have much effect on the price. The mean price across 1-4 time viewed does not have a lot of difference.
+
+```{r, fig.cap="Table 3: Floors Table"}
+T1 <- Train %>% group_by(floors) %>% summarize(Mean_Price = mean(price), 
+                                             Mean_sqftliving = mean(sqft_living), 
+                                             Mean_grade = mean(grade),
+                                             N = n())
+kable(T1, caption="Average, Standard Deviation, Median Price by Floors")
+```
+
+Table 3 shows us the relationship between floors and mean price, size, and grade of the house. There are only 8 houses that have 2.5 floors so we do not consider it. In general, 2 floors seems to be the best deal when it comes to choosing houses. Houses with 2 floors boast highest mean price and size, as well as highest grade. Houses with 3 floors actually perform worse than 2 floors according to these metrics.
+
+```{r, fig.cap="Correlation Plot for Quantitative Variables"}
+Train_num <- select_if(Train, is.numeric)
+C <- cor(Train_num, use="pairwise.complete.obs")
+corrplot(C)
+```
+
+The correlation plot show us which variables to include/avoid in our model.“sqft living”, “grade”, “sqft_above” and “sqft_living15” are highly correlated with the response variable "price". “sqft_living”, “sqft_living15”, “grade”, “sqft_above” and “bathrooms” are highly correlated with each other.
+“price”. Furthermore, “sqft_living15”, “grade”, “sqft_above” and “bathrooms”. “sqft_lot” and “sqft_lot15” are also highly correlated with each other. In general, we should avoid using the variables that are highly correlated, as well as avoid choosing variables that does not seem to belong in our model, such as "id", "lat", and "long". The rest of the variables can be considered to be put into the model.
+## Feature Engineering
+
+Create new variables, or modify existing variables. Include description of each variable you change and create, and relevant table or graph.  
+
+
+```{r}
+Train <- Train %>% mutate(viewBoolean = ifelse(view>0,"Yes","No"))
+```
+
+As seen by table 1, while having no view drastically lower the price, the number of times views does not have a huge impact on the price of the houses. Thus, I decide to turn the quantitative variable "view" to a logical categorical variable "viewBoolean", which indicates whether people have viewed the house or not. 
+
+```{r, fig.cap=" Figure 6: Price by View"}
+ggplot(data=Train, aes(y=price, x=viewBoolean)) + 
+  geom_violin( aes(fill=viewBoolean)) + 
+  geom_boxplot(width=0.2) +
+  xlab("Viewed") +
+  ggtitle("Price Distribution by View")
+```
+
+Consistent with the hypothesis, figure 6 shows houses that haven't been viewed have lower price than its counterpart. It also shows how houses with no view have more consistent price, with most houses fall right under the 500000 USD price mark. In contrast, houses with views are more evenly distributed across price ranges, with a little bit above 500000 USD seems to be the most popular range.
+
+```{r}
+Train <- Train %>% mutate(necessity = bathrooms +bedrooms)
+```
+
+As the number of bathrooms and bedrooms both have direct correlation with price, I combine them into one variable "necessity" to simplify the model and avoid using two similar variables. "Necessity" should also have direct correlation with price.
+
+```{r, fig.cap="Figure 7: Price and Necessity Plot"}
+ggplot(data=Train, aes(x=necessity, y=price)) + geom_point() + stat_smooth(method="lm") +
+  ylab("Price") + 
+  xlab("Necessity") +
+  ggtitle("Price and Necessity Plot")
+```
+
+True to our hypothesis, "necessity" have a direct correlation with price. With this, we can include "necessity" in our model instead of "bathrooms" and "bedrooms".
+
+```{r}
+Train <- Train %>% mutate(renovated = ifelse(yr_renovated>0,"Yes","No"))
+```
+
+Similar to "view", a new logical variable "renovated" is necessary to determine whether the house has been renovated or not. I believe a renovated house should cost more than a normal house (as well as easier to use than knowing the year it has been renovated), that's why I decide to make this variable.
+
+```{r, fig.cap=" Figure 8: Price by Renovated"}
+ggplot(data=Train, aes(y=price, x=renovated)) + 
+  geom_violin( aes(fill=renovated)) + 
+  geom_boxplot(width=0.2) +
+  xlab("Viewed") +
+  ggtitle("Price Distribution by Renovation Status")
+```
+
+```{r, fig.cap=" Table 4: Price by Renovated"}
+T1 <- Train %>% group_by(renovated) %>% summarize(Mean_Price = mean(price),
+                                             N = n())
+kable(T1, caption="Renovation Table")
+```
+
+Again, true to our hypothesis, renovated houses have higher mean price. Although there are only 40 renovated houses in our data set, it should be sufficent to include "renovated" in our model.
+
+```{r}
+Test <- Test %>% mutate(renovated = ifelse(yr_renovated>0,"Yes","No"))
+Test <- Test %>% mutate(necessity = bathrooms +bedrooms)
+Test <- Test %>% mutate(viewBoolean = ifelse(view>0,"Yes","No"))
+Train$date<-as.numeric(as.Date(Train$date))
+Test$date<-as.numeric(as.Date(Test$date))
+```
+
+## Model Evaluation
+We'll perform 5 repeats of 5-fold cross validation. 
+
+```{r}
+control <- trainControl(method="repeatedcv", number=5, repeats=5 )
+```
+
+Finding optimal lambda for Ridge Regression:
+```{r}
+l_vals = 10^seq(-3, 3, length = 100)
+
+set.seed(11082020)
+House_ridge <- train(price ~ bedrooms + bathrooms + sqft_living + sqft_lot + floors + waterfront + view + condition + grade + sqft_above + sqft_basement + yr_built + yr_renovated + sqft_living15 + sqft_lot15 + date, data = Train, method = "glmnet", trControl=control , 
+                      tuneGrid=expand.grid(alpha=0, lambda=l_vals))
+House_ridge$bestTune$lambda
+```
+
+Finding optimal cp for decision tree:
+```{r}
+cp_vals = 10^seq(-3, 3, length = 100)
+set.seed(11082020)
+House_Tree <- train(data=Train,price ~ bedrooms + bathrooms + sqft_living + sqft_lot + floors + waterfront + view + condition + grade + sqft_above + sqft_basement + yr_built + yr_renovated + sqft_living15 + sqft_lot15 + date,  method="rpart", trControl=control, 
+                     tuneGrid=expand.grid(cp=cp_vals))
+House_Tree$bestTune
+```
+
+
+We consider 7 models:
+
+1. simple linear regression model using only grade as explanatory variable. "grade" is overall grade given to the housing unit, based on King County grading system, so it should play an important role in determining the price of the house.
+2. Similar to model 1, but with polynomial regression. I want to fit a model with "grade" but with higher powers, with this model being 3.
+3. Multiple regression model with "waterfront","necessity","renovated","viewBoolean", and "sqft_living15". A model with two strong quantitative variables that are not highly correlated as well as some categorical variables. I believe this is enough to determine the price of a house, without being worried about overfitting.  
+4. Similar to model 3, but include interaction. As I did not check for interaction before, I would like to see if including interaction will help predict better or not  
+5. model including almost all variables, and leaving out only those that we wouldn't expect to have much relationship with price ((latitude, longitude, id, zipcode). By including all the variables that have effect on the response variable, I can get a high RMSPE.    
+6. A more experimental model using ridge regression, with the same variables as model 5, and optimal lambda = 1000. 
+7. A more experimental model using decision tree, using optimal cp = 0.001 and model 5's variables.
+
+```{r, message=FALSE, warning=FALSE, cache=FALSE}
+set.seed(11082020)
+model1 <- train(data=Train, price ~ grade,  method="lm", trControl=control)
+set.seed(11082020)
+model2 <- train(data=Train, price ~ grade + I(grade^2) + I(grade^3),  method="lm", trControl=control)
+set.seed(11082020)
+model3 <- train(data=Train, price ~ waterfront + necessity + renovated + viewBoolean + sqft_living15,  method="lm", trControl=control)
+set.seed(11082020)
+model4 <- train(data=Train, price ~ waterfront * necessity * renovated * viewBoolean * sqft_living15 ,  method="lm", trControl=control)
+set.seed(11082020)
+model5 <- train(data=Train, price ~ bedrooms + bathrooms + sqft_living + sqft_lot + floors + waterfront + view + condition + grade + sqft_above + sqft_basement + yr_built + yr_renovated + sqft_living15 + sqft_lot15 + date,  method="lm", trControl=control)
+set.seed(11082020)
+model6 <- train(data=Train, price ~ bedrooms + bathrooms + sqft_living + sqft_lot + floors + waterfront + view + condition + grade + sqft_above + sqft_basement + yr_built + yr_renovated + sqft_living15 + sqft_lot15 + date,  method="glmnet", trControl=control, tuneGrid=expand.grid(alpha=0, lambda=1000))
+set.seed(11082020)
+model7 <- train(data=Train, price ~ bedrooms + bathrooms + sqft_living + sqft_lot + floors + waterfront + view + condition + grade + sqft_above + sqft_basement + yr_built + yr_renovated + sqft_living15 + sqft_lot15 + date,  method="rpart", trControl=control, 
+                     tuneGrid=expand.grid(cp=0.001321941))
+```
+
+
+```{r, fig.cap=" Table 5: Cross Validation Result"}
+r1 <- model1$results$RMSE
+r2 <- model2$results$RMSE
+r3 <- model3$results$RMSE
+r4 <- model4$results$RMSE
+r5 <- model5$results$RMSE
+r6 <- model6$results$RMSE
+r7 <- model7$results$RMSE
+Model <- 1:7
+RMSPE <- c(r1, r2, r3, r4, r5, r6, r7)
+T <- data.frame(Model, RMSPE)
+kable(T, caption ="Cross Validation Results")
+```
+
+
+We also consider predicting log(price), using the same 8 models. 
+
+```{r, message=FALSE, warning=FALSE, cache=FALSE}
+set.seed(11082020)
+model1 <- train(data=Train, log(price) ~ grade,  method="lm", trControl=control)
+set.seed(11082020)
+model2 <- train(data=Train, log(price) ~ grade + I(grade^2) + I(grade^3),  method="lm", trControl=control)
+set.seed(11082020)
+model3 <- train(data=Train, log(price) ~ waterfront + necessity + renovated + viewBoolean + sqft_living15 ,  method="lm", trControl=control)
+set.seed(11082020)
+model4 <- train(data=Train, log(price) ~ waterfront * necessity * renovated * viewBoolean * sqft_living15 ,  method="lm", trControl=control)
+set.seed(11082020)
+model5 <- train(data=Train, log(price) ~ bedrooms + bathrooms + sqft_living + sqft_lot + floors + waterfront + view + condition + grade + sqft_above + sqft_basement + yr_built + yr_renovated + sqft_living15 + sqft_lot15 + date,  method="lm", trControl=control)
+set.seed(11082020)
+model6 <- train(data=Train, log(price) ~ bedrooms + bathrooms + sqft_living + sqft_lot + floors + waterfront + view + condition + grade + sqft_above + sqft_basement + yr_built + yr_renovated + sqft_living15 + sqft_lot15 + date,  method="glmnet", trControl=control, tuneGrid=expand.grid(alpha=0, lambda=1000))
+set.seed(11082020)
+model7 <- train(data=Train, log(price) ~ bedrooms + bathrooms + sqft_living + sqft_lot + floors + waterfront + view + condition + grade + sqft_above + sqft_basement + yr_built + yr_renovated + sqft_living15 + sqft_lot15 + date,  method="rpart", trControl=control, 
+                     tuneGrid=expand.grid(cp=0.001321941))
+```
+
+```{r}
+r1 <- model1$results$RMSE
+r2 <- model2$results$RMSE
+r3 <- model3$results$RMSE
+r4 <- model4$results$RMSE
+r5 <- model5$results$RMSE
+r6 <- model6$results$RMSE
+r7 <- model7$results$RMSE
+Model <- 1:7
+RMSPE <- c(r1, r2, r3, r4, r5, r6, r7)
+T <- data.frame(Model, RMSPE)
+kable(T, caption="Cross Validation Results for Log Model")
+```
+
+We see that model 6 and model 5 is quite similar in performance in predicting direct price, while model 5 was best at predicting log(price). For the sake of simplicity, I dedide to use model 5 to predict model.
+
+
+```{r}
+M1 <- lm(data=Train, price ~ bedrooms + bathrooms + sqft_living + sqft_lot + floors + waterfront + view + condition + grade + sqft_above + sqft_basement + yr_built + yr_renovated + sqft_living15 + sqft_lot15 + date)
+```
+
+We'll create residual plots for this model. 
+
+```{r, fig.cap="Plots for Model Check"}
+library(gridExtra)
+P1 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$fitted.values)) + geom_point() + ggtitle("Model Residual Plot") + xlab("Predicted Values") + ylab("Residuals")
+P2 <- ggplot(data=data.frame(M1$residuals), aes(x=M1$residuals)) + geom_histogram() + ggtitle("Histogram of Residuals") + xlab("Residual")
+P3 <- ggplot(data=data.frame(M1$residuals), aes(sample = M1$residuals)) + stat_qq() + stat_qq_line() + xlab("Normal Quantiles") + ylab("Residual Quantiles") + ggtitle("Model QQ Plot")
+grid.arrange(P1, P2, P3, ncol=3)
+```
+
+```{r, fig.width=9, fig.cap="Residual by Explanatory Variable Plot"}
+P1 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$model$bedrooms)) + geom_point() + ggtitle("Model Residual Plot") + xlab("Bedrooms") + ylab("Residuals") 
+P2 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$model$sqft_living)) + geom_point() + ggtitle("Model Residual Plot") + xlab("Living area") + ylab("Residuals")
+P3 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$model$bathrooms)) + geom_point() + ggtitle("Model Residual Plot") + xlab("Bathrooms") + ylab("Residuals")
+P4 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$model$sqft_lot)) + geom_point() + ggtitle("Model Residual Plot") + xlab("Lot area") + ylab("Residuals")
+P5 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$model$floors)) + geom_point() + ggtitle("Model Residual Plot") + xlab("Floors") + ylab("Residuals")
+P6 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$model$view)) + geom_point() + ggtitle("Model Residual Plot") + xlab("View") + ylab("Residuals")
+P7 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$model$condition)) + geom_point() + ggtitle("Model Residual Plot") + xlab("Condition") + ylab("Residuals")
+P8 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$model$grade)) + geom_point() + ggtitle("Model Residual Plot") + xlab("Grade") + ylab("Residuals")
+P9 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$model$sqft_above)) + geom_point() + ggtitle("Model Residual Plot") + xlab("Area without basement") + ylab("Residuals")
+P10 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$model$sqft_basement)) + geom_point() + ggtitle("Model Residual Plot") + xlab("Basement area") + ylab("Residuals")
+P11 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$model$yr_built)) + geom_point() + ggtitle("Model Residual Plot") + xlab("Year Built") + ylab("Residuals")
+P12 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$model$yr_renovated)) + geom_point() + ggtitle("Model Residual Plot") + xlab("Year Renovated") + ylab("Residuals")
+P13 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$model$sqft_living15)) + geom_point() + ggtitle("Model Residual Plot") + xlab("Living Area 2015") + ylab("Residuals")
+P14 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$model$sqft_lot15)) + geom_point() + ggtitle("Model Residual Plot") + xlab("Lot Area 2015") + ylab("Residuals")
+P15 <- ggplot(data=data.frame(M1$residuals), aes(y=M1$residuals, x=M1$model$date)) + geom_point() + ggtitle("Model Residual Plot") + xlab("Day Passed") + ylab("Residuals")
+
+grid.arrange(P1, P2, P3, P4, ncol=4)
+```
+
+```{r}
+grid.arrange(P5, P6, P7, P8, ncol=4)
+```
+
+```{r}
+grid.arrange(P9, P10, P11, P12, ncol=4)
+```
+
+```{r}
+grid.arrange(P13, P14, P15, ncol=3)
+```
+
+The residual by explanatory variable plots, show that there are some outliers in our data.This is in line with our graphs ealier and should not be a problem in our prediction. On that same note, there are also some constance variance and normality assumption violation in our models. Again, because we are building this model for predicting purposes, this should not have a big impact on our prediction. However, it's possible that correcting these will improve predictions.  
+
+Now, we make the predictions on the new data.
+
+```{r}
+Predictions <- predict(M1, newdata=Test)
+```
+
+
+```{r}
+Test$price <- Predictions
+```
+
+
+```{r}
+write.csv(Test, file="Test_predictions.csv")
+```
+
+## Conclusions
+
+Among the 7 models we made, model 5 of multiple regression using 17 explanatory variables returns the best result. This is rather surprising, as model 5 includes some highly correlated variable like sqft_living, sqft_lot and sqft_living15, sqft_lot15, Log transformation is not necessary in our report, as the RMSPE does not differ much. Engineereed variables turn out to not help much, as model 4 which includes all of them does not return as good of a result. Although, this may be caused by the low number of variables in model 4. Model 2 also performs surprisingly good with only one explanatory variables. This shows that "grade" is a great indication of price in our data set, and should always be considered when making another model.
+
+The variables that were not very helpful are zipcode, lat, long, and id. This is to be expected, as these are values given to a house and not very related to price. I did not include them in my models, although even if including them returns a lower RMSPE, the model would hardly be reliable.
+
+Ridge Regression and Decision Tree did not help much with our model. Although Ridge Regression did return a lower RMSPE, the difference is negligible and I do not use it for the sake of simplicty of the model. Decision tree is a lot more interesting, as using decision tree with all variables and cp = 0.001 did return a low RMSPE value of ~213000 (better than all 7 included model), I find it too unreliable due to including ID, lat, long as variables in the tree. Due to my lack of expertise with decision tree, I decided to not include it in our 7 models, although it may be worth taking under consideration.
+
+This report provides a good model for predicting price in King County, Washington. Although the location is rather limited, we can easily expand this to use on different areas as well, not just King County. 
+
